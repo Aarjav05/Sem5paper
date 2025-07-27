@@ -1,57 +1,80 @@
-class Deque:
-    def __init__(self):
-        self.arr = []
+import pandas as pd
+import time
+from playwright.sync_api import sync_playwright
 
-    def addFront(self, n):
-        self.arr.insert(0, n)
+def scrape_featured_insights():
+    items = []
 
-    def addRear(self, n):
-        self.arr.append(n)
+    with sync_playwright() as pw:
+        browser = pw.firefox.launch(headless=False)
+        page = browser.new_page()
 
-    def removeRear(self):
-        if not self.arr:
-            print("Deque empty. Cannot remove from an empty deque.\n")
-        else:
-            self.arr.pop()
+        # Visit the insights page
+        try:
+            page.goto("https://www.mckinsey.com/featured-insights", timeout=60000)
+        except Exception as err:
+            print("Error loading page:", err)
+            browser.close()
+            return items
 
-    def search(self, key):
-        if not self.arr:
-            print("Deque is empty. Cannot search.")
-            return
-        for i in range(len(self.arr)):
-            if self.arr[i] == key:
-                print("Found at index:", i)
-                return
-        print("Not found")
+        # Accept cookie pop-up if it appears
+        try:
+            page.wait_for_selector("button#onetrust-accept-btn-handler", timeout=5000)
+            page.click("button#onetrust-accept-btn-handler")
+            print("Cookies accepted")
+            time.sleep(1)
+        except:
+            print("No cookie prompt seen")
 
-    def display(self):
-        if not self.arr:
-            print("Deque is empty.")
-        else:
-            print("Deque:", self.arr)
+        # Scroll a few times to allow dynamic content loading
+        for step in range(8):
+            page.mouse.wheel(0, 4000)
+            time.sleep(2)
 
+        # Collect visible article links
+        link_nodes = page.query_selector_all("a.mdc-c-link___lBbY1_4145629")
+        print("Found", len(link_nodes), "links")
 
-print("Aarjav Jain C14 2303063\n")
+        for link in link_nodes:
+            try:
+                headline = link.inner_text().strip()
+                href = link.get_attribute("href")
 
-dq = Deque()
+                # Walk upward looking for the eyebrow label
+                label = link.evaluate("""
+                el => {
+                    let anc = el;
+                    for (let depth = 0; depth < 5; depth++) {
+                        if (!anc) break;
+                        const tagBox = anc.querySelector(".mck-c-eyebrow");
+                        if (tagBox && tagBox.textContent)
+                            return tagBox.textContent.trim();
+                        anc = anc.parentElement;
+                    }
+                    return null;
+                }
+                """) or "Unknown"
 
-dq.addFront(100)
-dq.addRear(200)
-dq.addRear(300)
-dq.addFront(50)
+                if href:
+                    full_href = href if href.startswith("http") else f"https://www.mckinsey.com{href}"
+                    items.append({
+                        "Title": headline,
+                        "URL": full_href,
+                        "Topic": label
+                    })
+            except Exception as e:
+                print("Skipping a link:", e)
+                continue
 
-print("After adding elements:")
-dq.display()
-print("\n")
+        browser.close()
 
-dq.removeRear()
-print("After removing from rear:")
-dq.display()
-print("\n")
+    return items
 
-print("Searching for 100:")
-dq.search(100)
-print("\n")
+def main():
+    rows = scrape_featured_insights()
+    df = pd.DataFrame(rows)
+    df.to_excel("mckinsey_insights.xlsx", index=False)
+    print(f"Saved {len(rows)} records to Excel")
 
-print("Searching for 500:")
-dq.search(500)
+if __name__ == "__main__":
+    main()
